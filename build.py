@@ -276,6 +276,20 @@ def add_element(slide, element, shapes, image_root):
         print(f"  {textbox.name}: テキストを追加")
 
 
+def delete_shape(slide, element):
+    """id の図形を消す。グループの id なら中身ごと消す。"""
+    found = slide.shapes._spTree.xpath(f'.//p:cNvPr[@id="{element["id"]}"]/../..')
+    if not found:
+        warn(f'id {element["id"]}（{element.get("name")}）の図形が見つかりません')
+        return
+    target = found[0]
+    rIds = target.xpath(".//@r:embed | .//@r:link")
+    name = target.xpath("./*[1]/p:cNvPr/@name")[0]
+    target.getparent().remove(target)
+    drop_unused_rels(slide.part, rIds)
+    print(f"  {name}: 削除")
+
+
 # ---------------------------------------------------------------- メイン
 
 
@@ -301,6 +315,9 @@ def build(json_path):
         for element in slide_spec["elements"]:
             if element.get("id") is None:
                 add_element(slide, element, shapes, image_root)
+                continue
+            if element["type"] == "delete":
+                delete_shape(slide, element)
                 continue
             shape = shapes.get(element["id"])
             if shape is None:

@@ -23,11 +23,12 @@ import re
 import sys
 from pathlib import Path
 
+from lxml import etree
 from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_LINE
-from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
+from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE, MSO_SHAPE_TYPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.shapes.shapetree import SlideShapeFactory
@@ -241,10 +242,21 @@ def set_paragraph_text(p, text):
 
 
 def scale_fonts(shape, scale):
-    """文字の大きさ（sz）をすべて scale 倍にする。"""
+    """文字の大きさ（sz）を変える。
+
+    scale が数値なら全体を scale 倍、{"28": 32, "36": 40} のような対応表なら、その大きさ（pt）の文字だけ置き換える。
+    """
     for node in shape.text_frame._txBody.iter(qn("a:rPr"), qn("a:endParaRPr"), qn("a:defRPr")):
-        if node.get("sz"):
-            node.set("sz", str(round(int(node.get("sz")) * scale / 100) * 100))
+        sz = node.get("sz")
+        if not sz:
+            continue
+        if isinstance(scale, dict):
+            pt = int(sz) / 100
+            new = scale.get(f"{pt:g}")
+            if new is not None:
+                node.set("sz", str(round(new * 100)))
+        else:
+            node.set("sz", str(round(int(sz) * scale / 100) * 100))
 
 
 def build_text(shape, element):
@@ -291,6 +303,9 @@ def clone_shape(slide, source, name):
 def add_element(slide, element, shapes, image_root):
     """"id" のない要素を新しく追加する。"copy_from" があればその図形の書式を複製する。"""
     name = element.get("name")
+    if element["type"] == "arrow":  # 矢印は box ではなく from / to で位置を決める
+        add_arrow(slide, element)
+        return
     box = element.get("box")
     if box is None:
         warn(f"{name or '新しい要素'}: 追加する要素には box が必要です")
@@ -340,6 +355,25 @@ def add_element(slide, element, shapes, image_root):
         texts = element.get("text") or [""]
         textbox.text_frame.text = "\n".join([texts] if isinstance(texts, str) else texts)
         print(f"  {textbox.name}: テキストを追加")
+
+
+def add_arrow(slide, element):
+    """矢印（直線コネクタ）を追加する。"from" の点から "to" の点へ向く（cm）。
+
+    "color": 線の色（RRGGBB、既定 FFFF00）、"width_pt": 線の太さ（既定 6）
+    """
+    (x1, y1), (x2, y2) = element["from"], element["to"]
+    line = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, cm_to_emu(x1), cm_to_emu(y1), cm_to_emu(x2), cm_to_emu(y2))
+    if element.get("name"):
+        line.name = element["name"]
+    line.line.color.rgb = RGBColor.from_string(element.get("color", "FFFF00"))
+    line.line.width = Pt(element.get("width_pt", 6))
+    ln = line.line._get_or_add_ln()
+    tail = ln.find(qn("a:tailEnd"))
+    if tail is None:
+        tail = etree.SubElement(ln, qn("a:tailEnd"))
+    tail.set("type", "triangle")
+    print(f"  {line.name}: 矢印を追加")
 
 
 def iter_groups(shapes):

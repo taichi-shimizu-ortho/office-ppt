@@ -26,8 +26,8 @@ from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_LINE
-from pptx.enum.shapes import MSO_SHAPE
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.shapes.shapetree import SlideShapeFactory
 from pptx.util import Pt
@@ -252,6 +252,9 @@ def add_element(slide, element, shapes, image_root):
     if element["type"] == "shape":
         warn(f"{name or '新しい要素'}: type \"shape\" には copy_from が必要です")
         return
+    if element["type"] == "table":
+        add_table(slide, element)
+        return
     left, top, width, height = (cm_to_emu(v) for v in box)
     if element["type"] == "image":
         path = element.get("path")
@@ -274,6 +277,78 @@ def add_element(slide, element, shapes, image_root):
         texts = element.get("text") or [""]
         textbox.text_frame.text = "\n".join([texts] if isinstance(texts, str) else texts)
         print(f"  {textbox.name}: テキストを追加")
+
+
+def iter_groups(shapes):
+    for shape in shapes:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield shape
+            yield from iter_groups(shape.shapes)
+
+
+# 罫線だけの表スタイル（PowerPoint の「スタイルなし、表のグリッド線」）
+TABLE_STYLE_GRID = "{5940675A-B579-460E-94D1-54222C63F5DA}"
+
+
+def add_table(slide, element):
+    """表を追加する。
+
+    "rows": 行ごとの文字列のリスト（1 行目は見出し）。null のセルは上のセルと結合する
+    "font_size": 文字の大きさ（pt、既定 28）
+    "col_widths": 列幅の比（省略時は均等）
+    "header_fill": 見出し行の塗り（RRGGBB、既定 D9D9D9）
+    """
+    rows = element["rows"]
+    n_rows, n_cols = len(rows), max(len(r) for r in rows)
+    left, top, width, height = (cm_to_emu(v) for v in element["box"])
+    frame = slide.shapes.add_table(n_rows, n_cols, left, top, width, height)
+    if element.get("name"):
+        frame.name = element["name"]
+    table = frame.table
+    table._tbl.tblPr.find(qn("a:tableStyleId")).text = TABLE_STYLE_GRID
+    table.first_row = True
+    table.horz_banding = False
+
+    ratios = element.get("col_widths") or [1] * n_cols
+    for col, ratio in zip(table.columns, ratios):
+        col.width = int(width * ratio / sum(ratios))
+    for row in table.rows:
+        row.height = int(height / n_rows)
+
+    font_size = Pt(element.get("font_size", 28))
+    header_fill = RGBColor.from_string(element.get("header_fill", "D9D9D9"))
+    for r, values in enumerate(rows):
+        for c in range(n_cols):
+            value = values[c] if c < len(values) else None
+            cell = table.cell(r, c)
+            if value is None:
+                continue
+            cell.text = str(value)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            if r == 0:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = header_fill
+            else:
+                cell.fill.background()
+            for p in cell.text_frame.paragraphs:
+                p.alignment = PP_ALIGN.CENTER
+                for run in p.runs:
+                    run.font.size = font_size
+                    run.font.bold = r == 0
+                    run.font.color.rgb = RGBColor(0, 0, 0)
+    # null のセルは、上の値のあるセルと結合する（例: 群名を縦に結合）
+    for c in range(n_cols):
+        r = 1
+        while r < n_rows:
+            if c < len(rows[r]) and rows[r][c] is None:
+                end = r
+                while end + 1 < n_rows and c < len(rows[end + 1]) and rows[end + 1][c] is None:
+                    end += 1
+                table.cell(r - 1, c).merge(table.cell(end, c))
+                r = end + 1
+            else:
+                r += 1
+    print(f"  {frame.name}: 表を追加（{n_rows}×{n_cols}）")
 
 
 def delete_shape(slide, element):
@@ -311,6 +386,7 @@ def build(json_path):
         slide = prs.slides[index]
         print(f"スライド {index + 1}")
         shapes = {shape.shape_id: shape for shape, _ in iter_shapes(slide.shapes)}
+        groups = {shape.shape_id: shape for shape in iter_groups(slide.shapes)}
 
         for element in slide_spec["elements"]:
             if element.get("id") is None:
@@ -318,6 +394,13 @@ def build(json_path):
                 continue
             if element["type"] == "delete":
                 delete_shape(slide, element)
+                continue
+            if element["type"] == "group":  # グループは位置・サイズだけ変える
+                group = groups.get(element["id"])
+                if group is None:
+                    warn(f'id {element["id"]}（{element.get("name")}）のグループが見つかりません')
+                else:
+                    apply_box(group, element.get("box"))
                 continue
             shape = shapes.get(element["id"])
             if shape is None:

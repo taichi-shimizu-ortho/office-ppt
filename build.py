@@ -29,6 +29,7 @@ from pptx.enum.dml import MSO_LINE
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
 from pptx.oxml.ns import qn
+from pptx.shapes.shapetree import SlideShapeFactory
 from pptx.util import Pt
 
 from template_common import (
@@ -114,10 +115,10 @@ def apply_fit(picture, image_path, fit):
         warn(f'fit "{fit}" は不明です（contain / cover / stretch）。stretch として扱います')
 
 
-def replace_with_frame(slide, shape, label):
-    """画像がない場合、画像を消して同じ位置に点線の枠を残す。"""
-    frame = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, shape.left, shape.top, shape.width, shape.height)
-    frame.name = shape.name
+def add_frame(slide, left, top, width, height, name, label):
+    """「画像未配置」の点線の枠をスライド最前面に追加する。"""
+    frame = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, height)
+    frame.name = name
     frame.fill.background()
     frame.line.color.rgb = FRAME_COLOR
     frame.line.dash_style = MSO_LINE.DASH
@@ -131,7 +132,12 @@ def replace_with_frame(slide, shape, label):
         for r in p.runs:
             r.font.color.rgb = FRAME_COLOR
             r.font.size = font_size
+    return frame
 
+
+def replace_with_frame(slide, shape, label):
+    """画像がない場合、画像を消して同じ位置に点線の枠を残す。"""
+    frame = add_frame(slide, shape.left, shape.top, shape.width, shape.height, shape.name, label)
     old_rIds = blip_rIds(shape._element)
     # add_shape はスライド最前面に追加されるので、元の画像の位置（グループ内も含む）へ移す
     shape._element.addprevious(frame._element)
@@ -206,6 +212,64 @@ def build_text(shape, element):
     print(f"  {shape.name}: テキストを更新")
 
 
+# ---------------------------------------------------------------- 新しい要素
+
+
+def clone_shape(slide, source, name):
+    """source を複製してスライド最前面（グループの外）に置く。書式はそのまま引き継ぐ。"""
+    element = copy.deepcopy(source._element)
+    c_nv_pr = element.xpath("./*[1]/p:cNvPr")[0]
+    c_nv_pr.set("id", str(slide.shapes._next_shape_id))
+    c_nv_pr.set("name", name or source.name)
+    slide.shapes._spTree.insert_element_before(element, "p:extLst")
+    return SlideShapeFactory(element, slide.shapes)
+
+
+def add_element(slide, element, shapes, image_root):
+    """"id" のない要素を新しく追加する。"copy_from" があればその図形の書式を複製する。"""
+    name = element.get("name")
+    box = element.get("box")
+    if box is None:
+        warn(f"{name or '新しい要素'}: 追加する要素には box が必要です")
+        return
+
+    source_id = element.get("copy_from")
+    if source_id is not None:
+        source = shapes.get(source_id)
+        if source is None:
+            warn(f"{name or '新しい要素'}: copy_from の id {source_id} の図形が見つかりません")
+            return
+        shape = clone_shape(slide, source, name)
+        if element["type"] == "image":
+            build_image(slide, shape, element, image_root)
+        else:
+            build_text(shape, element)
+        return
+
+    left, top, width, height = (cm_to_emu(v) for v in box)
+    if element["type"] == "image":
+        path = element.get("path")
+        image_path = (image_root / path) if path else None
+        if image_path is None or not image_path.is_file():
+            if image_path is not None:
+                warn(f"{name}: 画像が見つかりません: {image_path}")
+            add_frame(slide, left, top, width, height, name or "画像", path or name or "")
+            print(f"  {name}: 画像未配置の枠を追加")
+            return
+        picture = slide.shapes.add_picture(str(image_path), left, top, width, height)
+        if name:
+            picture.name = name
+        apply_fit(picture, image_path, element.get("fit", "contain"))
+        print(f"  {picture.name}: {path} を追加")
+    else:
+        textbox = slide.shapes.add_textbox(left, top, width, height)
+        if name:
+            textbox.name = name
+        texts = element.get("text") or [""]
+        textbox.text_frame.text = "\n".join([texts] if isinstance(texts, str) else texts)
+        print(f"  {textbox.name}: テキストを追加")
+
+
 # ---------------------------------------------------------------- メイン
 
 
@@ -229,6 +293,9 @@ def build(json_path):
         shapes = {shape.shape_id: shape for shape, _ in iter_shapes(slide.shapes)}
 
         for element in slide_spec["elements"]:
+            if element.get("id") is None:
+                add_element(slide, element, shapes, image_root)
+                continue
             shape = shapes.get(element["id"])
             if shape is None:
                 warn(f'id {element["id"]}（{element.get("name")}）の図形が見つかりません')

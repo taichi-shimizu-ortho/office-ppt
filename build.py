@@ -31,6 +31,7 @@ from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.shapes.shapetree import SlideShapeFactory
+from pptx.text.text import Font
 from pptx.util import Pt
 
 from template_common import (
@@ -176,7 +177,23 @@ def build_image(slide, shape, element, image_root):
 # ---------------------------------------------------------------- テキスト
 
 
-SUP = re.compile(r"<sup>(.*?)</sup>")
+# 段落内の書式指定: <sup>…</sup>（上付き）、<color=RRGGBB>…</color>（文字色）
+MARKUP = re.compile(r"<sup>(.*?)</sup>|<color=([0-9A-Fa-f]{6})>(.*?)</color>")
+
+
+def split_markup(line):
+    """(文字列, 上付きか, 色) の並びにする。"""
+    pos = 0
+    for m in MARKUP.finditer(line):
+        if m.start() > pos:
+            yield line[pos:m.start()], False, None
+        if m.group(1) is not None:
+            yield m.group(1), True, None
+        else:
+            yield m.group(3), False, m.group(2).upper()
+        pos = m.end()
+    if pos < len(line):
+        yield line[pos:], False, None
 
 
 def line_formats(p):
@@ -198,7 +215,7 @@ def set_paragraph_text(p, text):
 
     書式は行ごと（段落内改行 \n で区切った行）に、もとの同じ行の先頭の文字書式を引き継ぐ
     （例: 1 行目が和文タイトル 75pt、2 行目が英文タイトル 43pt）。行がもとより多ければ最後の行の書式。
-    <sup>…</sup> で囲んだ部分は上付き文字にする（所属番号など）。
+    <sup>…</sup> で囲んだ部分は上付き文字、<color=RRGGBB>…</color> はその色にする。
     """
     formats = line_formats(p)
     for child in p.content_children:
@@ -207,18 +224,20 @@ def set_paragraph_text(p, text):
         if i > 0:
             p.add_br()
         rPr = formats[min(i, len(formats) - 1)]
-        # <sup> の内と外を交互に並べる（奇数番目が上付き）
-        for j, part in enumerate(SUP.split(line)):
+        for part, sup, color in split_markup(line):
             if not part:
                 continue
             r = p.add_r()
             r.text = part
             if rPr is not None:
                 r.insert(0, copy.deepcopy(rPr))
-            if j % 2 == 1:
+            if sup:
                 r.get_or_add_rPr().set("baseline", "30000")
             elif r.rPr is not None and "baseline" in r.rPr.attrib:
                 del r.rPr.attrib["baseline"]
+            if color:
+                font = Font(r.get_or_add_rPr())
+                font.color.rgb = RGBColor.from_string(color)
 
 
 def scale_fonts(shape, scale):
@@ -412,11 +431,12 @@ def delete_shape(slide, element):
 # ---------------------------------------------------------------- メイン
 
 
-def build(json_path):
+def build(json_path, output=None):
     template = json.loads(json_path.read_text(encoding="utf-8"))
     json_dir = json_path.parent
     base_path = json_dir / template["base"]
-    output_path = json_dir / template["output"]
+    # -o があれば JSON の "output" より優先（別の PC で JSON を共有するとき用）
+    output_path = output.resolve() if output else json_dir / template["output"]
     image_root = json_dir / template.get("image_root", ".")
 
     if template.get("unit", "cm") != "cm":
@@ -468,8 +488,9 @@ def build(json_path):
 def main():
     parser = argparse.ArgumentParser(description="JSON テンプレートから pptx を生成する")
     parser.add_argument("json", type=Path, help="extract.py で作った JSON テンプレート")
+    parser.add_argument("-o", "--output", type=Path, help='出力先（JSON の "output" より優先）')
     args = parser.parse_args()
-    build(args.json.resolve())
+    build(args.json.resolve(), args.output)
 
 
 if __name__ == "__main__":

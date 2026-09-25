@@ -53,7 +53,7 @@ uv run extract.py ~/…/20261003産業医大学会/poster.pptx
 - テキストは段落ごとの配列。変更した段落だけ書き換える。段落内改行は `\n`。
   書き換えた段落は、行（`\n` 区切り）ごとに、もとの同じ行の先頭の文字書式を引き継ぐ
   （例: 1 行目の和文タイトル 75pt と 2 行目の英文タイトル 43pt）。
-  `<sup>1</sup>` と書くと上付き文字になる（所属番号など）。それ以外の混在した書式（一部だけ色や太字）は PowerPoint 上で直す。
+  `<sup>1</sup>` と書くと上付き文字、`<color=FF00FF>Vimentin</color>` と書くとその色になる。太字など、それ以外の混在した書式は PowerPoint 上で直す。
 - `"font_scale": 0.85` を付けると、そのテキストボックスの文字の大きさをすべて 0.85 倍にする。
 - JSON から消した要素は、もとの pptx のまま残る（もとの画像を残したいときは、その要素を消す）。
 - **要素の削除**: `{"id": <id>, "type": "delete"}` でその図形を消す。グループの id なら中身ごと消える。
@@ -82,6 +82,13 @@ uv run build.py ~/…/20261003産業医大学会/poster.json
 作業中の pptx は OneDrive に出さず、リポジトリ内の `UOEH_temp/`（git 管理外）に出す。
 `output` には絶対パスも書ける: `"output": "/Users/taichishimizu/uv-envs/office-ppt/UOEH_temp/poster_v1.pptx"`。
 OneDrive に置くのは、提出用に確定した版だけにする（数十 MB の版を毎回置くと同期が重くなる）。
+
+`-o` を付けると JSON の `output` より優先される。JSON を OneDrive で共有して別の PC（Windows など）で作るときは、
+その PC のリポジトリの `UOEH_temp` を指定する:
+
+```powershell
+uv run build.py "$env:USERPROFILE\OneDrive\Desktop\20261003産業医大学会\260924産業医大学会.json" -o UOEH_temp\poster.pptx
+```
 
 ## 顕微鏡画像（CZI）を PNG にする
 

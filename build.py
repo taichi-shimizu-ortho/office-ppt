@@ -242,10 +242,16 @@ def add_element(slide, element, shapes, image_root):
         shape = clone_shape(slide, source, name)
         if element["type"] == "image":
             build_image(slide, shape, element, image_root)
-        else:
+        elif element["type"] == "text":
             build_text(shape, element)
+        else:  # "shape": 線など。位置・サイズだけ変える
+            apply_box(shape, box)
+            print(f"  {shape.name}: 図形を追加")
         return
 
+    if element["type"] == "shape":
+        warn(f"{name or '新しい要素'}: type \"shape\" には copy_from が必要です")
+        return
     left, top, width, height = (cm_to_emu(v) for v in box)
     if element["type"] == "image":
         path = element.get("path")

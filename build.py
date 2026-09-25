@@ -19,6 +19,7 @@
 import argparse
 import copy
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -175,19 +176,62 @@ def build_image(slide, shape, element, image_root):
 # ---------------------------------------------------------------- テキスト
 
 
+SUP = re.compile(r"<sup>(.*?)</sup>")
+
+
+def line_formats(p):
+    """段落内の行（Shift+Enter 区切り）ごとに、先頭の文字書式 a:rPr を返す。"""
+    formats, current = [], None
+    for child in p.content_children:
+        if child.tag == qn("a:br"):
+            formats.append(current)
+            current = None
+        elif current is None and child.find(qn("a:rPr")) is not None:
+            current = child.find(qn("a:rPr"))
+    formats.append(current)
+    fallback = next((f for f in formats if f is not None), None)
+    return [f if f is not None else fallback for f in formats]
+
+
 def set_paragraph_text(p, text):
-    """段落の文字列を置き換える。書式は段落の先頭の文字書式を引き継ぐ。"""
-    first_rPr = next((c.find(qn("a:rPr")) for c in p.content_children if c.find(qn("a:rPr")) is not None), None)
+    """段落の文字列を置き換える。
+
+    書式は行ごと（段落内改行 \n で区切った行）に、もとの同じ行の先頭の文字書式を引き継ぐ
+    （例: 1 行目が和文タイトル 75pt、2 行目が英文タイトル 43pt）。行がもとより多ければ最後の行の書式。
+    <sup>…</sup> で囲んだ部分は上付き文字にする（所属番号など）。
+    """
+    formats = line_formats(p)
     for child in p.content_children:
         p.remove(child)
-    p.append_text(text)
-    if first_rPr is not None:
-        for r in p.r_lst:
-            r.insert(0, copy.deepcopy(first_rPr))
+    for i, line in enumerate(text.split("\n")):
+        if i > 0:
+            p.add_br()
+        rPr = formats[min(i, len(formats) - 1)]
+        # <sup> の内と外を交互に並べる（奇数番目が上付き）
+        for j, part in enumerate(SUP.split(line)):
+            if not part:
+                continue
+            r = p.add_r()
+            r.text = part
+            if rPr is not None:
+                r.insert(0, copy.deepcopy(rPr))
+            if j % 2 == 1:
+                r.get_or_add_rPr().set("baseline", "30000")
+            elif r.rPr is not None and "baseline" in r.rPr.attrib:
+                del r.rPr.attrib["baseline"]
+
+
+def scale_fonts(shape, scale):
+    """文字の大きさ（sz）をすべて scale 倍にする。"""
+    for node in shape.text_frame._txBody.iter(qn("a:rPr"), qn("a:endParaRPr"), qn("a:defRPr")):
+        if node.get("sz"):
+            node.set("sz", str(round(int(node.get("sz")) * scale / 100) * 100))
 
 
 def build_text(shape, element):
     apply_box(shape, element.get("box"))
+    if element.get("font_scale"):
+        scale_fonts(shape, element["font_scale"])
     new_texts = element.get("text")
     if new_texts is None:
         return

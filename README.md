@@ -71,6 +71,10 @@ uv run build.py ~/…/20261003産業医大学会/poster.json
 
 もとの pptx は上書きせず、`output` に保存する。
 
+作業中の pptx は OneDrive に出さず、リポジトリ内の `UOEH_temp/`（git 管理外）に出す。
+`output` には絶対パスも書ける: `"output": "/Users/taichishimizu/uv-envs/office-ppt/UOEH_temp/poster_v1.pptx"`。
+OneDrive に置くのは、提出用に確定した版だけにする（数十 MB の版を毎回置くと同期が重くなる）。
+
 ## 顕微鏡画像（CZI）を PNG にする
 
 明視野（H-E・MT など）の CZI を、ポスターに貼れる PNG に書き出す。

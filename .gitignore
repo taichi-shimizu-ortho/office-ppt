@@ -11,3 +11,9 @@ wheels/
 
 # PowerPoint lock files
 ~$*
+
+# macOS
+.DS_Store
+
+# 作業中に生成する pptx（OneDrive に置くと同期が重くなるのでローカルだけに置く）
+UOEH_temp/

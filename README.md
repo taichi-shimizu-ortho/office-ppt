@@ -114,3 +114,19 @@ uv run czi_to_png.py a.czi b.czi -o ~/…/20261003産業医大学会/imput/fig2
 
 患者リスト（氏名を含む）はリポジトリに入れない。どの患者がどのファイルかという具体的な対応も、
 このリポジトリは公開なので書かない。
+
+### 画像の一覧を作る
+
+```sh
+uv run index_images.py --csv ~/…/relaxin_clinical/患者リスト.csv -o ~/…/20261003産業医大学会/image_index.json
+```
+
+OneDrive の Desktop 以下の顕微鏡画像（czi / jpg / tif / png）を、ファイル名だけで患者・組織・染色に振り分けて
+JSON にする。ファイルの中身は読まないので、OneDrive からのダウンロードは起きない。
+
+- `patients`: 患者ごと → 組織ごと → 染色ごとの相対パス。`fluorescence`（ApoTome の蛍光）、`ish`（PPIB がある
+  フォルダ＝in situ hybridization）、`export`（ZEN の書き出し）、`note`（名前の年齢・性別がリストと違う、など）が付く
+- `rxfp_coverage`: 患者ごとに、DAB 免疫染色の RXFP1 が組織ごとに `czi` / `jpg/tif のみ` / `なし` のどれか
+- `unmatched`: 組織名はあるが患者が特定できなかったファイル
+
+出力には患者の番号・年齢・性別が入るので、このリポジトリ（公開）には置かない。

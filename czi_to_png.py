@@ -8,7 +8,10 @@
 2. 縁の黒い行・列を切り落とす（撮影時に上や左が 1〜2 px 黒く残ることがある）
 3. タイル境界に出る 1 px の黒い線を、上下（左右）の平均で埋める
 4. 明るさを調整する
-   - 白バランス: 各色の背景（--white-percentile、既定 99.5 パーセンタイル）を --white-level に合わせる
+   - 白バランス: 背景の色を --white-level の白に合わせる。背景の色は、輝度が --white-percentile
+     （既定 99.5）パーセンタイル以上の画素の平均色とする。色ごとに別々にパーセンタイルを取ると、
+     赤く染まった組織が多い視野で赤だけ基準が上がり、背景が青く残るため。
+     視野にガラス部分がないときは --white R,G,B で同じ日の別視野の背景色を指定する
    - 黒点: 暗い側（輝度 0.5 パーセンタイル × --black）を 0 に寄せてコントラストをつける
    - ガンマ: 中間調を --gamma で締める（1 より大きいと暗く・色が濃くなる）
 5. --rotate があれば時計回りに回転し、PNG に保存する
@@ -86,20 +89,27 @@ def fix_seams(rgb):
     return img, count
 
 
-def adjust(rgb, white_level, white_percentile, black, gamma):
+def estimate_white(rgb, percentile):
+    """いちばん明るい画素（ふつうはガラス部分）の平均色を背景の色とする。"""
+    pixels = rgb.reshape(-1, 3)
+    lum = pixels.mean(axis=1)
+    return pixels[lum >= np.percentile(lum, percentile)].mean(axis=0)
+
+
+def adjust(rgb, white, white_level, black, gamma):
     """白バランス・黒点・ガンマ。0〜1 の float を返す。"""
-    white = np.percentile(rgb.reshape(-1, 3), white_percentile, axis=0)
     balanced = np.clip(rgb * (white_level / np.clip(white, 1, None)), 0, 255) / 255
     low = np.percentile(balanced.mean(axis=2), 0.5) * black
     high = min(1.0, white_level / 255 + 0.01)
-    return np.clip((balanced - low) / (high - low), 0, 1) ** gamma, white
+    return np.clip((balanced - low) / (high - low), 0, 1) ** gamma
 
 
 def convert(path, output_dir, args):
     rgb, um_per_pixel = read_czi(path)
     rgb, trimmed = trim_black_edges(rgb)
     img, seams = fix_seams(rgb) if not args.no_seam_fix else (rgb.astype(np.float32), 0)
-    out, white = adjust(img, args.white_level, args.white_percentile, args.black, args.gamma)
+    white = args.white if args.white is not None else estimate_white(img, args.white_percentile)
+    out = adjust(img, white, args.white_level, args.black, args.gamma)
 
     image = Image.fromarray((out * 255).round().astype(np.uint8))
     if args.rotate:
@@ -126,13 +136,21 @@ def convert(path, output_dir, args):
     print(f"{path.name} → {output_path.name}  {image.size[0]}×{image.size[1]}  {scale}  {cut}  線の補修 {seams}")
 
 
+def parse_rgb(value):
+    parts = value.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError(f"R,G,B の形で指定してください: {value}")
+    return np.array([float(v) for v in parts])
+
+
 def main():
     parser = argparse.ArgumentParser(description="明視野 CZI を明るさ調整した PNG に書き出す")
     parser.add_argument("czi", nargs="+", type=Path, help="変換する CZI")
     parser.add_argument("-o", "--output-dir", type=Path, required=True, help="PNG の出力先フォルダ")
     parser.add_argument("--rotate", type=int, default=0, choices=(0, 90, 180, 270), help="時計回りの回転角（既定 0）")
     parser.add_argument("--white-level", type=float, default=245, help="背景を合わせる明るさ 0〜255（既定 245）")
-    parser.add_argument("--white-percentile", type=float, default=99.5, help="背景とみなすパーセンタイル（既定 99.5）")
+    parser.add_argument("--white-percentile", type=float, default=99.5, help="輝度がこのパーセンタイル以上を背景とみなす（既定 99.5）")
+    parser.add_argument("--white", type=parse_rgb, metavar="R,G,B", help="背景の色を直接指定する（ガラス部分がない視野用）")
     parser.add_argument("--black", type=float, default=0.4, help="黒点をどれだけ詰めるか 0〜1（既定 0.4、0 で無効）")
     parser.add_argument("--gamma", type=float, default=1.3, help="中間調のガンマ（既定 1.3、1 で無効）")
     parser.add_argument("--no-seam-fix", action="store_true", help="1 px の黒い線を補修しない")
